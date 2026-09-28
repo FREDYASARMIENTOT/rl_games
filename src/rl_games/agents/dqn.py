@@ -1,33 +1,51 @@
-"""
-Deep Q-Network (DQN) implementation in PyTorch.
+"""Deep Q-Network (DQN) in PyTorch.
 
-This module intentionally avoids high-level RL libraries so every piece of
-the algorithm is visible and editable for learning purposes.
+Contents:
+  - QNetwork     : fully-connected network mapping state -> Q(s, a)
+  - ReplayBuffer : fixed-size FIFO buffer of (s, a, r, s', done) transitions
+  - DQNAgent     : epsilon-greedy policy, training loop, target-network sync,
+                   and save/load
 
-Key components:
-  - QNetwork     : a small fully-connected network that maps state → Q(s,a)
-  - ReplayBuffer : stores (s, a, r, s', done) transitions for experience replay
-  - DQNAgent     : the training loop, ε-greedy policy, and target-network sync
+QNetwork and parts of DQNAgent are exercises; see CHEATSHEET.md.
 """
 import random
 from collections import deque
 from pathlib import Path
 from typing import Self
 
-import gymnasium as gym
 import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
+
+from rl_games import envs
+from rl_games.agents.base import BaseAgent
 
 
 # ── Neural network ────────────────────────────────────────────────────
 
 
 class QNetwork(nn.Module):
-    # TODO: Implement the QNetwork
+    """Maps a state to one Q-value per action.
 
-    pass
+    Two hidden layers is the standard baseline for LunarLander-sized
+    problems: enough capacity to matter, small enough to train on CPU.
+    """
+
+    def __init__(self, state_dim: int, action_dim: int, hidden: int = 128) -> None:
+        super().__init__()
+        # EXERCISE: build the network.
+        #   - input is `state_dim` wide, output is `action_dim` wide, because
+        #     the net returns one Q-value per action in a single forward pass
+        #   - `hidden` units in between, with a nonlinearity after each
+        #     hidden layer (without one you have a linear model)
+        #   - no activation on the output: Q-values are unbounded
+        raise NotImplementedError("QNetwork.__init__ -- see CHEATSHEET.md")
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Q-values for a batch of states, shape (batch, action_dim)."""
+        # EXERCISE: run `x` through the layers defined in __init__.
+        raise NotImplementedError("QNetwork.forward -- see CHEATSHEET.md")
 
 
 # ── Replay buffer ────────────────────────────────────────────────────
@@ -59,13 +77,15 @@ class ReplayBuffer:
 # ── Agent ─────────────────────────────────────────────────────────────
 
 
-class DQNAgent:
+class DQNAgent(BaseAgent):
     """
     Deep Q-Network agent implemented from scratch.
 
     Hyperparameters are intentionally exposed as constructor args so you
     can experiment with them directly.
     """
+
+    label = "DQN"
 
     def __init__(
         self,
@@ -81,18 +101,18 @@ class DQNAgent:
         target_update_freq: int = 10,
         hidden: int = 128,
     ) -> None:
-        self.env_id = env_id
-        self.lr = lr
-        self.gamma = gamma
-        self.epsilon = epsilon_start
-        self.epsilon_start = epsilon_start
-        self.epsilon_end = epsilon_end
-        self.epsilon_decay = epsilon_decay
+        super().__init__(
+            env_id,
+            lr=lr,
+            gamma=gamma,
+            epsilon_start=epsilon_start,
+            epsilon_end=epsilon_end,
+            epsilon_decay=epsilon_decay,
+        )
         self.batch_size = batch_size
         self.target_update_freq = target_update_freq
-        self.training_episodes = 0
 
-        env = gym.make(env_id)
+        env = envs.make(env_id)
         self.state_dim = env.observation_space.shape[0]
         self.action_dim = int(env.action_space.n)  # type: ignore[attr-defined]
         env.close()
@@ -110,58 +130,43 @@ class DQNAgent:
     # ── policy ────────────────────────────────────────────────────────
 
     def select_action(self, state: np.ndarray, *, deterministic: bool = False) -> int:
-        if not deterministic and random.random() < self.epsilon:
-            return random.randrange(self.action_dim)
-        with torch.no_grad():
-            t = torch.FloatTensor(state).unsqueeze(0).to(self.device)
-            q_values = self.q_net(t)
-            return int(q_values.argmax(dim=1).item())
+        """Epsilon-greedy action for `state`.
 
-    def predict(
-        self, obs: np.ndarray, *, deterministic: bool = True
-    ) -> tuple[int, None]:
-        return self.select_action(obs, deterministic=deterministic), None
+        With probability self.epsilon pick uniformly at random (unless
+        `deterministic`), otherwise pick argmax of the online network's
+        Q-values.
+        """
+        # EXERCISE: implement epsilon-greedy over self.q_net.
+        #   - wrap the forward pass in torch.no_grad(): this is inference, so
+        #     there is no need to build a graph
+        #   - the net expects a batch dimension, a single state does not have one
+        raise NotImplementedError("DQNAgent.select_action -- see CHEATSHEET.md")
 
     # ── learning step ─────────────────────────────────────────────────
 
     def _learn(self) -> float:
         """Sample a mini-batch from the buffer and perform one gradient step.
 
-        Returns the batch loss value.
+        Returns the batch loss value, or 0.0 while the buffer is too small.
         """
         if len(self.buffer) < self.batch_size:
             return 0.0
 
-        batch = self.buffer.sample(self.batch_size)
-        states, actions, rewards, next_states, dones = zip(*batch)
-
-        states_t = torch.FloatTensor(np.array(states)).to(self.device)
-        actions_t = torch.LongTensor(actions).unsqueeze(1).to(self.device)
-        rewards_t = torch.FloatTensor(rewards).unsqueeze(1).to(self.device)
-        next_states_t = torch.FloatTensor(np.array(next_states)).to(self.device)
-        dones_t = torch.FloatTensor(dones).unsqueeze(1).to(self.device)
-
-        # Q(s, a) from the online network
-        current_q = self.q_net(states_t).gather(1, actions_t)
-
-        # max_a' Q_target(s', a') from the frozen target network
-        with torch.no_grad():
-            next_q = self.target_net(next_states_t).max(dim=1, keepdim=True).values
-
-        # Bellman target: r + γ * max Q(s', a') * (1 - done)
-        target_q = rewards_t + self.gamma * next_q * (1.0 - dones_t)
-
-        loss = self.loss_fn(current_q, target_q)
-        self.optimizer.zero_grad()
-        loss.backward()
-        self.optimizer.step()
-
-        return loss.item()
+        # EXERCISE: one DQN gradient step.
+        #   1. sample a batch and turn each column into a tensor on self.device
+        #   2. current Q: self.q_net(states), keeping only the actions taken
+        #      (torch.gather does this)
+        #   3. target Q: r + gamma * max_a' Q_target(s', a') * (1 - done).
+        #      Use the TARGET network here, under torch.no_grad(), and note
+        #      the (1 - done) factor -- a terminal state has no future reward
+        #   4. self.loss_fn(current, target), then zero_grad / backward / step
+        #   5. return loss.item()
+        raise NotImplementedError("DQNAgent._learn -- see CHEATSHEET.md")
 
     # ── training loop ─────────────────────────────────────────────────
 
     def train(self, total_episodes: int = 500, log_interval: int = 10) -> list[float]:
-        env = gym.make(self.env_id)
+        env = envs.make(self.env_id)
         rewards_history: list[float] = []
 
         for episode in range(1, total_episodes + 1):
@@ -185,7 +190,7 @@ class DQNAgent:
                 obs = next_obs
                 total_reward += reward
 
-            self.epsilon = max(self.epsilon_end, self.epsilon * self.epsilon_decay)
+            self._decay_epsilon()
             self.training_episodes += 1
             rewards_history.append(total_reward)
 
@@ -193,12 +198,12 @@ class DQNAgent:
                 self.target_net.load_state_dict(self.q_net.state_dict())
 
             if episode % log_interval == 0:
-                avg = np.mean(rewards_history[-log_interval:])
-                print(
-                    f"Episode {episode}/{total_episodes} | "
-                    f"Avg Reward: {avg:.2f} | "
-                    f"Epsilon: {self.epsilon:.4f} | "
-                    f"Buffer: {len(self.buffer)}"
+                self._log_episode(
+                    episode,
+                    total_episodes,
+                    rewards_history,
+                    log_interval,
+                    f"Buffer: {len(self.buffer)}",
                 )
 
         env.close()
@@ -226,7 +231,7 @@ class DQNAgent:
             "target_update_freq": self.target_update_freq,
         }
         torch.save(data, path)
-        print(f"Saved DQN agent to {path}")
+        print(f"Saved {self.label} agent to {path}")
 
     @classmethod
     def load(cls, path: Path) -> Self:
@@ -250,7 +255,7 @@ class DQNAgent:
     def info(self) -> str:
         params = sum(p.numel() for p in self.q_net.parameters())
         return (
-            f"DQN agent for {self.env_id}\n"
+            f"{self.label} agent for {self.env_id}\n"
             f"  Episodes trained  : {self.training_episodes}\n"
             f"  Network params    : {params:,}\n"
             f"  Epsilon           : {self.epsilon:.4f}\n"

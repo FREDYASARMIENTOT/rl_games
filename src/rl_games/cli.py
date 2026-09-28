@@ -1,37 +1,34 @@
+"""Command-line interface for the `rlgames` command.
+
+Contents:
+  - cmd_*()         : one function per subcommand (version, list, inspect,
+                      init, train, delete, load, sim, render)
+  - _build_parser() : the argparse parser wiring commands to their options
+  - main()          : entry point
+
+Argument parsing and output formatting only; the underlying behaviour lives
+in rl_games.registry, rl_games.evaluate, rl_games.envs and the agents.
+"""
+from __future__ import annotations
+
 import argparse
 from importlib.metadata import version
-from pathlib import Path
 
-import gymnasium as gym
 import numpy as np
 
-ENV_ID = "LunarLander-v3"
-SAVE_DIR = Path("saves")
-AGENT_CHOICES = ("qlearning", "dqn")
+from rl_games import envs, evaluate, registry
+from rl_games.registry import AGENT_CHOICES
+
+ENV_ID = envs.DEFAULT_ENV_ID
 VERSION = version("rl_games")
-
-
-def _save_path(agent_type: str) -> Path:
-    if agent_type == "qlearning":
-        return SAVE_DIR / "qlearning_lunar.pkl"
-    return SAVE_DIR / "dqn_lunar.pt"
-
-
-def _load_agent(agent_type: str):
-    path = _save_path(agent_type)
-    if agent_type == "qlearning":
-        from rl_games.agents.qlearning import QLearningAgent
-        return QLearningAgent.load(path)
-    from rl_games.agents.dqn import DQNAgent
-    return DQNAgent.load(path)
 
 
 # ── commands ─────────────────────────────────────────────────────────
 
 
 def cmd_inspect(args: argparse.Namespace) -> None:
-    env_id = args.env or ENV_ID
-    env = gym.make(env_id)
+    env_id = args.env
+    env = envs.make(env_id)
 
     print(f"Environment: {env_id}\n")
     print(f"Observation space : {env.observation_space}")
@@ -70,43 +67,26 @@ def cmd_inspect(args: argparse.Namespace) -> None:
 
 
 def cmd_init(args: argparse.Namespace) -> None:
-    path = _save_path(args.agent)
+    path = registry.save_path(args.agent, args.env)
 
     if path.exists():
         print(f"Save already exists at {path}. Run 'rlgames delete {args.agent}' first.")
         return
 
-    if args.agent == "qlearning":
-        from rl_games.agents.qlearning import QLearningAgent
-        agent = QLearningAgent(ENV_ID)
-    else:
-        from rl_games.agents.dqn import DQNAgent
-        agent = DQNAgent(ENV_ID)
-
-    agent.save(path)
+    registry.create(args.agent, args.env).save(path)
     print(f"Initialized {args.agent} agent.")
 
 
 def cmd_train(args: argparse.Namespace) -> None:
-    path = _save_path(args.agent)
-
-    if args.agent == "qlearning":
-        from rl_games.agents.qlearning import QLearningAgent
-        agent = QLearningAgent.load(path) if path.exists() else QLearningAgent(ENV_ID)
-        agent.train(total_episodes=args.episodes)
-        agent.save(path)
-
-    else:
-        from rl_games.agents.dqn import DQNAgent
-        agent = DQNAgent.load(path) if path.exists() else DQNAgent(ENV_ID)
-        agent.train(total_episodes=args.episodes)
-        agent.save(path)
+    agent = registry.load_or_create(args.agent, args.env)
+    agent.train(total_episodes=args.episodes)
+    agent.save(registry.save_path(args.agent, args.env))
 
     print("Training complete.")
 
 
 def cmd_delete(args: argparse.Namespace) -> None:
-    path = _save_path(args.agent)
+    path = registry.save_path(args.agent, args.env)
     if path.exists():
         path.unlink()
         print(f"Deleted {path}")
@@ -115,52 +95,30 @@ def cmd_delete(args: argparse.Namespace) -> None:
 
 
 def cmd_load(args: argparse.Namespace) -> None:
-    path = _save_path(args.agent)
+    path = registry.save_path(args.agent, args.env)
     if not path.exists():
         print(f"No save found at {path}")
         return
 
-    agent = _load_agent(args.agent)
+    agent = registry.load(args.agent, args.env)
     print(agent.info())
 
     if args.eval:
         print("\nEvaluating (10 episodes) ...")
-        env = gym.make(ENV_ID)
-        rewards = []
-        for _ in range(10):
-            obs, _ = env.reset()
-            done, total = False, 0.0
-            while not done:
-                action, _ = agent.predict(obs, deterministic=True)
-                obs, reward, terminated, truncated, _ = env.step(action)
-                done = terminated or truncated
-                total += reward
-            rewards.append(total)
+        env = envs.make(args.env)
+        rewards = evaluate.run_episodes(agent, env, n_episodes=10)
         env.close()
         print(f"  Mean reward: {np.mean(rewards):.2f} +/- {np.std(rewards):.2f}")
 
 
-ACTION_NAMES = {
-    0: "noop",
-    1: "left engine",
-    2: "main engine",
-    3: "right engine",
-}
-
-
-def _fmt_action(action: int) -> str:
-    name = ACTION_NAMES.get(action, "?")
-    return f"{action} ({name})"
-
-
 def cmd_sim(args: argparse.Namespace) -> None:
-    path = _save_path(args.agent)
+    path = registry.save_path(args.agent, args.env)
     if not path.exists():
         print(f"No save found at {path}")
         return
 
-    agent = _load_agent(args.agent)
-    env = gym.make(ENV_ID)
+    agent = registry.load(args.agent, args.env)
+    env = envs.make(args.env)
 
     all_rewards: list[float] = []
 
@@ -185,7 +143,7 @@ def cmd_sim(args: argparse.Namespace) -> None:
 
             if limit is None or step <= limit:
                 print(
-                    f"  step {step:>4} | action={_fmt_action(action):>18} | "
+                    f"  step {step:>4} | action={action:>4} | "
                     f"reward={reward:+8.3f} | total={total_reward:+9.2f}"
                 )
                 if args.verbose:
@@ -196,13 +154,7 @@ def cmd_sim(args: argparse.Namespace) -> None:
         if limit is not None and step > limit:
             print(f"  ... ({step - limit} more steps) ...")
 
-        outcome = "LANDED" if not terminated else "CRASHED" if total_reward < 0 else "LANDED"
-        if truncated:
-            outcome = "TRUNCATED (time limit)"
-        elif terminated and total_reward < 0:
-            outcome = "CRASHED"
-        else:
-            outcome = "LANDED"
+        outcome = "TRUNCATED (time limit)" if truncated else "TERMINATED"
 
         print(f"\n  Result: {outcome} | Steps: {step} | Total reward: {total_reward:+.2f}\n")
         all_rewards.append(total_reward)
@@ -217,25 +169,15 @@ def cmd_sim(args: argparse.Namespace) -> None:
 
 
 def cmd_render(args: argparse.Namespace) -> None:
-    path = _save_path(args.agent)
+    path = registry.save_path(args.agent, args.env)
     if not path.exists():
         print(f"No save found at {path}")
         return
 
-    agent = _load_agent(args.agent)
-    env = gym.make(ENV_ID, render_mode="human")
+    agent = registry.load(args.agent, args.env)
+    env = envs.make(args.env, render_mode="human")
 
-    for ep in range(1, args.episodes + 1):
-        obs, _ = env.reset()
-        done = False
-        total_reward = 0.0
-
-        while not done:
-            action, _ = agent.predict(obs, deterministic=True)
-            obs, reward, terminated, truncated, _ = env.step(action)
-            done = terminated or truncated
-            total_reward += reward
-
+    for ep, total_reward in enumerate(evaluate.run_episodes(agent, env, n_episodes=args.episodes), 1):
         print(f"Episode {ep}/{args.episodes} | Reward: {total_reward:.2f}")
 
     env.close()
@@ -245,12 +187,15 @@ def cmd_version(_args: argparse.Namespace) -> None:
     print(f"rl_games {VERSION}")
 
 
-def cmd_list(_args: argparse.Namespace) -> None:
-    print("Available agents:\n")
+def cmd_list(args: argparse.Namespace) -> None:
+    print(f"Available agents for {args.env}:\n")
     for agent in AGENT_CHOICES:
-        path = _save_path(agent)
+        path = registry.save_path(agent, args.env)
         status = "saved" if path.exists() else "no save"
         print(f"  {agent:<14} [{status}]  {path}")
+
+    print(f"\nEnvs with hand-written bounds: {', '.join(envs.OBS_BOUNDS)}")
+    print("Others work too if their observation space is bounded.")
 
 
 # ── argument parser ──────────────────────────────────────────────────
@@ -259,9 +204,17 @@ def cmd_list(_args: argparse.Namespace) -> None:
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="rlgames",
-        description="Train and evaluate RL agents on LunarLander-v3",
+        description="Train and evaluate RL agents on Gymnasium environments",
     )
     sub = parser.add_subparsers(dest="command", required=True)
+
+    def add_env_arg(p: argparse.ArgumentParser) -> None:
+        p.add_argument(
+            "--env",
+            type=str,
+            default=ENV_ID,
+            help=f"Gymnasium env ID (default: {ENV_ID})",
+        )
 
     # version
     p = sub.add_parser("version", help="Show the package version")
@@ -269,6 +222,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
     # list
     p = sub.add_parser("list", help="List available agents and their save status")
+    add_env_arg(p)
     p.set_defaults(func=cmd_list)
 
     # inspect
@@ -276,30 +230,34 @@ def _build_parser() -> argparse.ArgumentParser:
         "inspect",
         help="Inspect an environment: show state/action spaces and sample transitions",
     )
-    p.add_argument("--env", type=str, default=None, help=f"Gymnasium env ID (default: {ENV_ID})")
+    add_env_arg(p)
     p.add_argument("--steps", type=int, default=5, help="Random steps to sample (default: 5)")
     p.set_defaults(func=cmd_inspect)
 
     # init
     p = sub.add_parser("init", help="Initialize a new (untrained) agent and save it")
     p.add_argument("agent", choices=AGENT_CHOICES)
+    add_env_arg(p)
     p.set_defaults(func=cmd_init)
 
     # train
     p = sub.add_parser("train", help="Train an agent and save the result")
     p.add_argument("agent", choices=AGENT_CHOICES)
     p.add_argument("--episodes", type=int, default=10_000, help="Training episodes (default: 10k)")
+    add_env_arg(p)
     p.set_defaults(func=cmd_train)
 
     # delete
     p = sub.add_parser("delete", help="Delete a saved agent")
     p.add_argument("agent", choices=AGENT_CHOICES)
+    add_env_arg(p)
     p.set_defaults(func=cmd_delete)
 
     # load
     p = sub.add_parser("load", help="Load a saved agent and display info")
     p.add_argument("agent", choices=AGENT_CHOICES)
     p.add_argument("--eval", action="store_true", help="Run a quick 10-episode evaluation")
+    add_env_arg(p)
     p.set_defaults(func=cmd_load)
 
     # sim
@@ -308,12 +266,14 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--episodes", type=int, default=1, help="Number of episodes to simulate (default: 1)")
     p.add_argument("--steps", type=int, default=None, help="Limit output to the first N steps per episode (default: show all)")
     p.add_argument("--verbose", action="store_true", help="Print every step with full state vectors")
+    add_env_arg(p)
     p.set_defaults(func=cmd_sim)
 
     # render
     p = sub.add_parser("render", help="Render episodes using a saved agent (graphical window)")
     p.add_argument("agent", choices=AGENT_CHOICES)
     p.add_argument("--episodes", type=int, default=1, help="Number of episodes to render (default: 1)")
+    add_env_arg(p)
     p.set_defaults(func=cmd_render)
 
     return parser
