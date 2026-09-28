@@ -3,6 +3,11 @@
 A hands-on repo for understanding how Reinforcement Learning works.
 Train, inspect, and visualise RL agents on [LunarLander-v3](https://gymnasium.farama.org/environments/box2d/lunar_lander/) (or any other Gymnasium environment).
 
+**The learning algorithms are exercises.** The scaffolding around them -- CLI,
+persistence, environment handling, evaluation -- is complete and working, but
+the parts that actually learn raise `NotImplementedError` until you write them.
+See [Exercises](#exercises) below.
+
 ## LunarLander-v3 environment
 
 The default environment is [LunarLander-v3](https://gymnasium.farama.org/environments/box2d/lunar_lander/).
@@ -77,7 +82,7 @@ $$
 - $\alpha$ (learning rate) — how fast we update.
 - **$\varepsilon$-greedy** exploration — with probability $\varepsilon$ pick a random action, otherwise pick $\arg\max_a Q(s, a)$. $\varepsilon$ decays over time so the agent gradually shifts from exploring to exploiting.
 
-> See `src/rl_games/agents/qlearning.py` for a complete tabular implementation.
+> `src/rl_games/agents/qlearning.py` holds the tabular agent. The discretisation, policy and TD update are exercises.
 
 ### Deep Q-Network (DQN)
 
@@ -95,7 +100,7 @@ Training step (one gradient update):
 2. Compute targets: $y = r + \gamma \cdot \max_{a'} Q_{\text{target}}(s', a') \cdot (1 - \text{done})$.
 3. Minimise MSE between $Q_\theta(s, a)$ and $y$.
 
-> See `src/rl_games/agents/dqn.py` for a from-scratch PyTorch implementation where every component (network, replay buffer, training loop) is visible and editable.
+> `src/rl_games/agents/dqn.py` holds the from-scratch PyTorch agent. The replay buffer and training loop are complete; the network and the gradient step are exercises.
 
 ### Exploration vs. Exploitation
 
@@ -108,8 +113,11 @@ The $\varepsilon$-greedy schedule balances both: start with high $\varepsilon$ (
 
 | Agent | Algorithm | State representation | File |
 |---|---|---|---|
-| `qlearning` | Tabular Q-Learning | Discretized (8 bins per dim) | `agents/qlearning.py` |
+| `qlearning` | Tabular Q-Learning | Discretized (`n_bins=10` per continuous dim) | `agents/qlearning.py` |
 | `dqn` | DQN from scratch (PyTorch) | Raw continuous | `agents/dqn.py` |
+
+Both share `agents/base.py`, which holds the hyperparameters, the
+epsilon-greedy schedule and `predict()`. Each implements its own `train()`.
 
 ## Setup
 
@@ -143,7 +151,8 @@ Show state/action spaces and sample a few random transitions to see what the age
 
 ```bash
 rlgames inspect                          # LunarLander-v3 (default)
-rlgames inspect --steps 10              # more sample transitions
+rlgames inspect --steps 10               # more sample transitions
+rlgames inspect --env CartPole-v1        # any Gymnasium env
 ```
 
 ### Initialize a new untrained agent
@@ -197,10 +206,91 @@ rlgames delete dqn
 
 ```
 src/rl_games/
-├── cli.py                  # CLI entry point
+├── cli.py                  # argument parsing and output formatting only
+├── registry.py             # which agents exist, where they are saved
+├── evaluate.py             # run an agent greedily, without learning
+├── envs.py                 # env construction and observation bounds
 └── agents/
+    ├── base.py             # shared hyperparameters, epsilon schedule, predict()
     ├── qlearning.py        # Tabular Q-Learning agent
     └── dqn.py              # DQN agent from scratch (PyTorch)
 ```
 
-Saves are written to `saves/` in the working directory.
+Saves are written to `saves/` in the working directory, one file per
+(agent, environment) pair — e.g. `saves/qlearning_LunarLander-v3.pkl`.
+
+## Using it as a library
+
+The CLI is a thin wrapper, so everything is reachable from Python:
+
+```python
+from rl_games import registry, evaluate, envs
+
+agent = registry.load_or_create("qlearning", "CartPole-v1")
+agent.train(total_episodes=2000)
+
+env = envs.make("CartPole-v1")
+print(evaluate.run_episodes(agent, env, n_episodes=10))
+env.close()
+```
+
+## Choosing an environment
+
+Every command takes `--env`, defaulting to `LunarLander-v3`:
+
+```bash
+rlgames train qlearning --env CartPole-v1 --episodes 5000
+rlgames train dqn       --env Acrobot-v1  --episodes 500
+```
+
+Most Gymnasium environments with a **discrete action space** work with no
+extra code: the action count and observation shape are read from the
+environment itself.
+
+The one exception is tabular Q-learning on an environment that reports an
+**unbounded** observation space. Bin edges cannot be placed between `-inf`
+and `+inf`, so those environments need practical ranges added to `OBS_BOUNDS`
+in `src/rl_games/envs.py`:
+
+```python
+OBS_BOUNDS: dict[str, tuple[np.ndarray, int]] = {
+    "LunarLander-v3": (np.array([[-1.5, 1.5], ...]), 2),
+    #                  ^ [low, high] per continuous dim       ^ trailing
+    #                                                           binary dims
+}
+```
+
+Run `rlgames list` to see which environments have entries. DQN never needs
+them.
+
+## Exercises
+
+These raise `NotImplementedError` until you implement them:
+
+| # | Where | What |
+|:---:|---|---|
+| 1 | `agents/dqn.py` → `QNetwork.__init__` | Build the fully-connected layers |
+| 2 | `agents/dqn.py` → `QNetwork.forward` | Run a batch of states through them |
+| 3 | `agents/dqn.py` → `DQNAgent.select_action` | Epsilon-greedy over the network |
+| 4 | `agents/dqn.py` → `DQNAgent._learn` | One Bellman gradient step |
+| 5 | `agents/qlearning.py` → `discretize` | Continuous observation → table key |
+| 6 | `agents/qlearning.py` → `select_action` | Epsilon-greedy over the Q-table |
+| 7 | `agents/qlearning.py` → `_update` | The temporal-difference update |
+
+Each stub carries a comment describing what it needs to do and which
+attributes are already available. Suggested order: 5 → 6 → 7 (tabular
+Q-learning end to end), then 1 → 2 → 3 → 4 (DQN).
+
+Check your progress with:
+
+```bash
+rlgames train qlearning --env CartPole-v1 --episodes 2000
+rlgames load qlearning --env CartPole-v1 --eval
+```
+
+CartPole is the better signal than LunarLander — discretisation costs a
+tabular agent most of the LunarLander state, so a mediocre score there does
+not mean your code is wrong.
+
+Reference solutions live in `CHEATSHEET.md`, which is gitignored: it is in
+your working copy but never committed.
