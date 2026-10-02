@@ -3,9 +3,10 @@
 A hands-on repo for understanding how Reinforcement Learning works.
 Train, inspect, and visualise RL agents on [LunarLander-v3](https://gymnasium.farama.org/environments/box2d/lunar_lander/) (or any other Gymnasium environment).
 
-**The learning algorithms are exercises.** The scaffolding around them -- CLI,
-persistence, environment handling, evaluation -- is complete and working, but
-the parts that actually learn raise `NotImplementedError` until you write them.
+**The DQN learning algorithm is an exercise.** The scaffolding around it -- CLI,
+persistence, environment handling, evaluation, a working **tabular Q-Learning**
+agent and a local **web UI** -- is complete and working. The network and the
+gradient step of DQN raise `NotImplementedError` until you write them.
 See [Exercises](#exercises) below.
 
 ## LunarLander-v3 environment
@@ -202,6 +203,81 @@ rlgames delete qlearning
 rlgames delete dqn
 ```
 
+## Local web app (live lab)
+
+A small, **dependency-free** web UI to train and watch the agents in a browser.
+It is handy for demos and for eyeballing how hyperparameters change behaviour
+without touching the command line.
+
+```bash
+uv run python webapp/server.py
+# then open http://127.0.0.1:8000
+```
+
+### What you can do
+
+- **Set the hyperparameters** in a form -- agent (`qlearning` / `dqn`),
+  environment, number of episodes, `n_bins`, `lr`, `gamma`,
+  `epsilon_start` / `epsilon_end` / `epsilon_decay` -- and press **Entrenar**.
+- **See the learning curve** drawn live on a canvas: the per-episode reward
+  plus the 100-episode moving average, together with the final mean and ε.
+- **Watch the agent behave**: **Simular** runs greedy episodes on the server
+  and returns the full trajectory, which the page then animates step by step.
+  Cart-pole is drawn from the real states (cart position and pole angle); any
+  other environment falls back to per-dimension bars. Use **▶ Reproducir** and
+  the speed slider to control playback.
+- **Read the log panel** for the training summary and per-episode returns.
+- **Limpiar** forgets the current agent and lets you start over.
+
+### How it works
+
+It is a single-file, **standard-library-only** HTTP server (`http.server`) plus
+one HTML page -- no Flask/FastAPI, no build step, no new dependencies.
+
+| Method | Path | Purpose |
+|:---:|---|---|
+| `GET` | `/` | serve the landing page (`index.html`) |
+| `GET` | `/api/status` | info about the agent currently held in memory |
+| `POST` | `/api/train` | build an agent from JSON hyperparameters and train it |
+| `POST` | `/api/run` | play N greedy episodes and return the full trajectories |
+| `POST` | `/api/delete` | forget the current agent |
+
+Example request:
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/train \
+  -H "Content-Type: application/json" \
+  -d '{"agent_type":"qlearning","env_id":"CartPole-v1","episodes":2000,"n_bins":12,"epsilon_decay":0.99}'
+```
+
+Notes:
+
+- The trained agent lives **in memory** (one per server process): stopping the
+  server loses it, and it never touches `saves/`.
+- `qlearning` needs only NumPy + Gymnasium; `dqn` additionally needs torch
+  (installed by `uv sync`). The agent classes are imported lazily, so merely
+  opening the page never imports torch.
+- A good first demo is `CartPole-v1` with `n_bins=12`, `epsilon_decay=0.99` and
+  a few thousand episodes. The default `epsilon_decay=0.9995` keeps ε high for
+  a long time, so the agent appears to learn slowly in a short run.
+
+### Running without torch (Q-Learning only)
+
+`uv sync` downloads torch (~108 MiB), which can be slow on a poor connection.
+If you only care about the tabular agent you can skip it:
+
+```bash
+uv venv
+uv pip install gymnasium numpy
+# Linux / macOS
+PYTHONPATH=src .venv/bin/python webapp/server.py
+# Windows
+$env:PYTHONPATH="src"; .venv\Scripts\python.exe webapp\server.py
+```
+
+The whole UI and the `qlearning` agent work; only the `dqn` option in the agent
+dropdown will fail (it needs torch).
+
 ## Project structure
 
 ```
@@ -212,8 +288,11 @@ src/rl_games/
 ├── envs.py                 # env construction and observation bounds
 └── agents/
     ├── base.py             # shared hyperparameters, epsilon schedule, predict()
-    ├── qlearning.py        # Tabular Q-Learning agent
-    └── dqn.py              # DQN agent from scratch (PyTorch)
+    ├── qlearning.py        # Tabular Q-Learning agent (implemented)
+    └── dqn.py              # DQN agent from scratch (PyTorch, exercises)
+webapp/
+├── server.py               # stdlib HTTP server + JSON API (train/run/status)
+└── index.html              # single-page UI: form, learning curve, animation
 ```
 
 Saves are written to `saves/` in the working directory, one file per
@@ -265,21 +344,23 @@ them.
 
 ## Exercises
 
-These raise `NotImplementedError` until you implement them:
+The **tabular Q-Learning** agent (`agents/qlearning.py`) is implemented in this
+version and works end to end -- use it as a complete reference. The **DQN**
+slots still raise `NotImplementedError` until you fill them in:
 
-| # | Where | What |
-|:---:|---|---|
-| 1 | `agents/dqn.py` → `QNetwork.__init__` | Build the fully-connected layers |
-| 2 | `agents/dqn.py` → `QNetwork.forward` | Run a batch of states through them |
-| 3 | `agents/dqn.py` → `DQNAgent.select_action` | Epsilon-greedy over the network |
-| 4 | `agents/dqn.py` → `DQNAgent._learn` | One Bellman gradient step |
-| 5 | `agents/qlearning.py` → `discretize` | Continuous observation → table key |
-| 6 | `agents/qlearning.py` → `select_action` | Epsilon-greedy over the Q-table |
-| 7 | `agents/qlearning.py` → `_update` | The temporal-difference update |
+| # | Where | What | Status |
+|:---:|---|---|:---:|
+| 1 | `agents/dqn.py` → `QNetwork.__init__` | Build the fully-connected layers | todo |
+| 2 | `agents/dqn.py` → `QNetwork.forward` | Run a batch of states through them | todo |
+| 3 | `agents/dqn.py` → `DQNAgent.select_action` | Epsilon-greedy over the network | todo |
+| 4 | `agents/dqn.py` → `DQNAgent._learn` | One Bellman gradient step | todo |
+| 5 | `agents/qlearning.py` → `discretize` | Continuous observation → table key | **done** |
+| 6 | `agents/qlearning.py` → `select_action` | Epsilon-greedy over the Q-table | **done** |
+| 7 | `agents/qlearning.py` → `_update` | The temporal-difference update | **done** |
 
-Each stub carries a comment describing what it needs to do and which
-attributes are already available. Suggested order: 5 → 6 → 7 (tabular
-Q-learning end to end), then 1 → 2 → 3 → 4 (DQN).
+Each DQN stub carries a comment describing what it needs to do and which
+attributes are already available. Suggested order: study 5 → 6 → 7 (the working
+tabular agent), then implement 1 → 2 → 3 → 4 (DQN).
 
 Check your progress with:
 

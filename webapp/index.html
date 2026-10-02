@@ -1,0 +1,376 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>RL Games · Live Lab</title>
+<style>
+  :root{
+    --bg:#0b1020; --panel:#121a33; --panel2:#0e1530; --line:#243154;
+    --txt:#e8edff; --muted:#93a1c9; --accent:#6c8cff; --accent2:#39d0b6;
+    --danger:#ff6b81; --ok:#39d0b6;
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0; font-family:"Segoe UI",system-ui,Arial,sans-serif;
+    background:radial-gradient(1200px 600px at 20% -10%,#16224a,transparent),var(--bg);
+    color:var(--txt); line-height:1.45;
+  }
+  header{
+    padding:28px 24px 10px; max-width:1200px; margin:0 auto;
+  }
+  h1{margin:0 0 4px; font-size:26px}
+  h1 span{color:var(--accent2)}
+  header p{margin:0; color:var(--muted)}
+  main{
+    max-width:1200px; margin:0 auto; padding:16px 24px 60px;
+    display:grid; grid-template-columns:360px 1fr; gap:20px;
+  }
+  @media (max-width:920px){ main{grid-template-columns:1fr} }
+  .card{
+    background:linear-gradient(180deg,var(--panel),var(--panel2));
+    border:1px solid var(--line); border-radius:14px; padding:18px;
+  }
+  .card h2{margin:0 0 12px; font-size:15px; letter-spacing:.4px; text-transform:uppercase; color:var(--muted)}
+  label{display:block; font-size:12px; color:var(--muted); margin:10px 0 4px}
+  input,select{
+    width:100%; padding:9px 10px; border-radius:9px; border:1px solid var(--line);
+    background:#0a1024; color:var(--txt); font-size:14px; outline:none;
+  }
+  input:focus,select:focus{border-color:var(--accent)}
+  .grid2{display:grid; grid-template-columns:1fr 1fr; gap:10px}
+  .row{display:flex; gap:10px; margin-top:16px; flex-wrap:wrap}
+  button{
+    cursor:pointer; border:none; border-radius:10px; padding:10px 16px;
+    font-size:14px; font-weight:600; color:#0a1024; background:var(--accent);
+  }
+  button.ghost{background:transparent; color:var(--txt); border:1px solid var(--line)}
+  button.ok{background:var(--accent2)}
+  button:disabled{opacity:.5; cursor:not-allowed}
+  #log{
+    margin-top:14px; height:150px; overflow:auto; font-family:Consolas,monospace;
+    font-size:12px; background:#080d1c; border:1px solid var(--line); border-radius:9px; padding:8px;
+    white-space:pre-wrap;
+  }
+  canvas{width:100%; background:#080d1c; border:1px solid var(--line); border-radius:12px; display:block}
+  .stats{display:flex; gap:18px; flex-wrap:wrap; margin:10px 0 4px; font-size:13px}
+  .stats b{color:var(--accent2)}
+  .muted{color:var(--muted); font-size:12px}
+  .badge{display:inline-block; padding:2px 8px; border-radius:999px; font-size:11px; border:1px solid var(--line); color:var(--muted)}
+  .spinner{display:inline-block; width:12px; height:12px; border:2px solid var(--line); border-top-color:var(--accent);
+    border-radius:50%; animation:spin .8s linear infinite; vertical-align:-1px}
+  @keyframes spin{to{transform:rotate(360deg)}}
+</style>
+</head>
+<body>
+<header>
+  <h1>RL Games · <span>Live Lab</span></h1>
+  <p>Entrena un agente Q-Learning / DQN, ajusta sus hiperparámetros y observa cómo se comporta.</p>
+</header>
+
+<main>
+  <!-- ── panel de hiperparámetros ── -->
+  <section class="card" style="align-self:start">
+    <h2>Hiperparámetros</h2>
+
+    <label for="agent_type">Agente</label>
+    <select id="agent_type">
+      <option value="qlearning" selected>qlearning (tabular)</option>
+      <option value="dqn">dqn (PyTorch)</option>
+    </select>
+
+    <label for="env_id">Entorno (Gymnasium)</label>
+    <input id="env_id" type="text" value="CartPole-v1" />
+
+    <label for="episodes">Episodios de entrenamiento</label>
+    <input id="episodes" type="text" value="2000" />
+
+    <div class="grid2">
+      <div>
+        <label for="n_bins">n_bins</label>
+        <input id="n_bins" type="text" value="10" />
+      </div>
+      <div>
+        <label for="lr">lr (α)</label>
+        <input id="lr" type="text" value="0.1" />
+      </div>
+      <div>
+        <label for="gamma">gamma (γ)</label>
+        <input id="gamma" type="text" value="0.99" />
+      </div>
+      <div>
+        <label for="epsilon_start">epsilon_start</label>
+        <input id="epsilon_start" type="text" value="1.0" />
+      </div>
+      <div>
+        <label for="epsilon_end">epsilon_end</label>
+        <input id="epsilon_end" type="text" value="0.01" />
+      </div>
+      <div>
+        <label for="epsilon_decay">epsilon_decay</label>
+        <input id="epsilon_decay" type="text" value="0.9995" />
+      </div>
+    </div>
+
+    <div class="row">
+      <button id="btn-train">Entrenar</button>
+      <button id="btn-clear" class="ghost">Limpiar</button>
+    </div>
+
+    <p class="muted" style="margin-top:12px">Estado: <span id="status" class="badge">sin agente</span></p>
+    <div id="log"></div>
+  </section>
+
+  <!-- ── resultados ── -->
+  <div style="display:flex; flex-direction:column; gap:20px">
+    <section class="card">
+      <h2>Curva de aprendizaje</h2>
+      <div class="stats">
+        <span>Episodios: <b id="s-episodes">–</b></span>
+        <span>Media (últ. 100): <b id="s-mean">–</b></span>
+        <span>ε final: <b id="s-eps">–</b></span>
+      </div>
+      <canvas id="curve" width="760" height="260"></canvas>
+    </section>
+
+    <section class="card">
+      <h2>Comportamiento del agente</h2>
+      <div class="stats">
+        <span>Episodio: <b id="s-total">–</b></span>
+        <span>Paso: <b id="s-step">–</b></span>
+        <span>Acción: <b id="s-action">–</b></span>
+      </div>
+      <canvas id="stage" width="760" height="320"></canvas>
+      <div class="row" style="align-items:center">
+        <input id="sim_episodes" type="text" value="1" style="width:70px" title="episodios a simular" />
+        <button id="btn-run" class="ok">Simular</button>
+        <button id="btn-play" class="ghost">▶ Reproducir</button>
+        <label style="margin:0" for="speed">Velocidad</label>
+        <input id="speed" type="range" min="10" max="200" value="60" style="width:140px" />
+      </div>
+      <p class="muted">La animación se dibuja a partir del estado real emitido por el entorno (cart-pole). Para otros entornos se muestran barras por dimensión.</p>
+    </section>
+  </div>
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+
+function num(id, fallback) {
+  const v = parseFloat($(id).value);
+  return Number.isFinite(v) ? v : fallback;
+}
+
+function params() {
+  return {
+    agent_type: $("agent_type").value,
+    env_id: $("env_id").value.trim() || "CartPole-v1",
+    episodes: Math.round(num("episodes", 2000)),
+    n_bins: Math.round(num("n_bins", 10)),
+    lr: num("lr", 0.1),
+    gamma: num("gamma", 0.99),
+    epsilon_start: num("epsilon_start", 1.0),
+    epsilon_end: num("epsilon_end", 0.01),
+    epsilon_decay: num("epsilon_decay", 0.9995),
+  };
+}
+
+function log(msg) {
+  const el = $("log");
+  el.textContent += msg + "\n";
+  el.scrollTop = el.scrollHeight;
+}
+
+function busy(on) {
+  ["btn-train", "btn-run", "btn-clear"].forEach((id) => ($(id).disabled = on));
+}
+
+function setStatus(text) { $("status").textContent = text; }
+
+async function post(path, body) {
+  const res = await fetch(path, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body || {}),
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || ("HTTP " + res.status));
+  return data;
+}
+
+async function train() {
+  const p = params();
+  busy(true); setStatus("entrenando…");
+  log("▶ Entrenando " + p.agent_type + " en " + p.env_id + " (" + p.episodes + " episodios)…");
+  const t0 = performance.now();
+  try {
+    const d = await post("/api/train", p);
+    drawCurve(d.rewards);
+    $("s-episodes").textContent = d.episodes;
+    $("s-mean").textContent = d.mean_last_100.toFixed(1);
+    $("s-eps").textContent = d.epsilon.toFixed(4);
+    setStatus(d.agent_type + " @ " + d.env_id);
+    log("✔ Listo en " + ((performance.now() - t0) / 1000).toFixed(1) +
+        "s | media últ.100=" + d.mean_last_100.toFixed(1) + " | ε=" + d.epsilon.toFixed(4));
+    if (d.info) log(d.info);
+  } catch (e) {
+    setStatus("error"); log("✖ " + e.message);
+  } finally { busy(false); }
+}
+
+async function runEpisode() {
+  busy(true);
+  try {
+    const n = Math.round(num("sim_episodes", 1)) || 1;
+    log("▶ Simulando " + n + " episodio(s)…");
+    const d = await post("/api/run", { n_episodes: n });
+    log("✔ Recompensas: [" + d.episodes.map((e) => e.total.toFixed(1)).join(", ") + "]");
+    loadTrajectory(d.episodes[0]);
+    play();
+  } catch (e) {
+    log("✖ " + e.message);
+  } finally { busy(false); }
+}
+
+$("btn-train").onclick = train;
+$("btn-run").onclick = runEpisode;
+$("btn-clear").onclick = async () => {
+  try { await post("/api/delete"); } catch (e) { /* ignore */ }
+  setStatus("sin agente"); log("Limpiado.");
+};
+
+// ── curva de aprendizaje ──────────────────────────────────────────────
+function drawCurve(rewards) {
+  const c = $("curve"), ctx = c.getContext("2d");
+  const W = c.width, H = c.height, pad = 34;
+  ctx.clearRect(0, 0, W, H);
+  ctx.strokeStyle = "#243154"; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(pad, pad); ctx.lineTo(pad, H - pad); ctx.lineTo(W - pad, H - pad); ctx.stroke();
+  if (!rewards || !rewards.length) {
+    ctx.fillStyle = "#93a1c9"; ctx.font = "13px Segoe UI";
+    ctx.fillText("Aún no hay datos de entrenamiento.", pad + 6, H / 2);
+    return;
+  }
+  const min = Math.min(...rewards), max = Math.max(...rewards);
+  const span = Math.max(1e-6, max - min);
+  const x = (i) => pad + (W - 2 * pad) * (i / Math.max(1, rewards.length - 1));
+  const y = (v) => H - pad - (H - 2 * pad) * ((v - min) / span);
+
+  ctx.strokeStyle = "rgba(108,140,255,.45)"; ctx.lineWidth = 1; ctx.beginPath();
+  rewards.forEach((v, i) => (i ? ctx.lineTo(x(i), y(v)) : ctx.moveTo(x(i), y(v))));
+  ctx.stroke();
+
+  const win = Math.max(1, Math.round(rewards.length / 20));
+  ctx.strokeStyle = "#39d0b6"; ctx.lineWidth = 2; ctx.beginPath();
+  let sum = 0;
+  rewards.forEach((v, i) => {
+    sum += v; if (i >= win) sum -= rewards[i - win];
+    const m = sum / Math.min(i + 1, win);
+    i ? ctx.lineTo(x(i), y(m)) : ctx.moveTo(x(i), y(m));
+  });
+  ctx.stroke();
+
+  ctx.fillStyle = "#93a1c9"; ctx.font = "11px Consolas";
+  ctx.fillText(max.toFixed(0), 4, pad + 4);
+  ctx.fillText(min.toFixed(0), 4, H - pad + 2);
+  ctx.fillText("0", pad, H - pad + 14);
+  ctx.fillText(String(rewards.length), W - pad - 14, H - pad + 14);
+}
+
+// ── comportamiento (animación del entorno) ────────────────────────────
+let traj = null, idx = 0, timer = null;
+const isCartPole = () => traj && traj.states[0] && traj.states[0].length === 4;
+
+function loadTrajectory(ep) {
+  traj = ep; idx = 0;
+  if (timer) { clearInterval(timer); timer = null; $("btn-play").textContent = "▶ Reproducir"; }
+  drawFrame(0);
+}
+
+function drawFrame(i) {
+  const c = $("stage"), ctx = c.getContext("2d");
+  const W = c.width, H = c.height;
+  ctx.clearRect(0, 0, W, H);
+  if (!traj) {
+    ctx.fillStyle = "#93a1c9"; ctx.font = "14px Segoe UI";
+    ctx.fillText("Entrena y pulsa «Simular» para ver el comportamiento.", 20, 32);
+    return;
+  }
+  const state = traj.states[Math.min(i, traj.states.length - 1)];
+  $("s-total").textContent = traj.total.toFixed(1);
+  $("s-step").textContent = i + " / " + traj.steps;
+  $("s-action").textContent = i < traj.actions.length ? traj.actions[i] : "–";
+  if (isCartPole()) drawCartPole(ctx, W, H, state); else drawBars(ctx, W, H, state);
+}
+
+function drawCartPole(ctx, W, H, s) {
+  const cx = s[0], theta = s[2];
+  const groundY = H - 60;
+  const halfScale = (W * 0.42) / 2.4;
+  const px = W / 2 + cx * halfScale;
+  const cartW = 90, cartH = 34, poleLen = 120;
+
+  ctx.strokeStyle = "#243154"; ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.moveTo(0, groundY); ctx.lineTo(W, groundY); ctx.stroke();
+
+  ctx.fillStyle = "#6c8cff";
+  ctx.fillRect(px - cartW / 2, groundY - cartH, cartW, cartH);
+
+  ctx.fillStyle = "#39d0b6";
+  ctx.beginPath(); ctx.arc(px - cartW / 3, groundY, 7, 0, 7); ctx.fill();
+  ctx.beginPath(); ctx.arc(px + cartW / 3, groundY, 7, 0, 7); ctx.fill();
+
+  const topX = px + poleLen * Math.sin(theta);
+  const topY = groundY - cartH - poleLen * Math.cos(theta);
+  ctx.strokeStyle = "#e8edff"; ctx.lineWidth = 6; ctx.lineCap = "round";
+  ctx.beginPath(); ctx.moveTo(px, groundY - cartH); ctx.lineTo(topX, topY); ctx.stroke();
+  ctx.fillStyle = "#e8edff";
+  ctx.beginPath(); ctx.arc(topX, topY, 5, 0, 7); ctx.fill();
+
+  ctx.fillStyle = "#93a1c9"; ctx.font = "12px Consolas";
+  ctx.fillText("x=" + cx.toFixed(2) + "   θ=" + theta.toFixed(3) + " rad", 12, 20);
+}
+
+function drawBars(ctx, W, H, s) {
+  const n = s.length, pad = 34;
+  const maxAbs = Math.max(1e-6, ...s.map((v) => Math.abs(v)));
+  const rowH = (H - 2 * pad) / n;
+  ctx.strokeStyle = "#243154"; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(W / 2, pad - 10); ctx.lineTo(W / 2, H - pad + 10); ctx.stroke();
+  ctx.font = "11px Consolas";
+  s.forEach((v, i) => {
+    const cy = pad + i * rowH + rowH / 2 - 6;
+    const w = (v / maxAbs) * (W - 2 * pad) / 2;
+    ctx.fillStyle = v >= 0 ? "#39d0b6" : "#ff6b81";
+    ctx.fillRect(W / 2, cy, w, 10);
+    ctx.fillStyle = "#93a1c9";
+    ctx.fillText("dim " + i + " = " + v.toFixed(3), 8, cy + 9);
+  });
+}
+
+function play() {
+  if (!traj) return;
+  if (timer) { clearInterval(timer); timer = null; $("btn-play").textContent = "▶ Reproducir"; return; }
+  const speed = 210 - parseInt($("speed").value, 10);
+  timer = setInterval(() => {
+    idx++;
+    if (idx >= traj.states.length) {
+      clearInterval(timer); timer = null; $("btn-play").textContent = "▶ Reproducir"; return;
+    }
+    drawFrame(idx);
+  }, speed);
+  $("btn-play").textContent = "⏸ Pausar";
+}
+
+$("btn-play").onclick = play;
+$("speed").oninput = () => { if (timer) { clearInterval(timer); timer = null; play(); } };
+
+// ── arranque ──────────────────────────────────────────────────────────
+drawCurve([]);
+drawFrame(0);
+fetch("/api/status").then((r) => r.json()).then((d) => {
+  if (d.info) { setStatus(d.agent_type + " @ " + d.env_id); log(d.info); }
+}).catch(() => {});
+</script>
+</body>
+</html>

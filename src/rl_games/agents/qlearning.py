@@ -68,20 +68,25 @@ class QLearningAgent(BaseAgent):
         The result is used directly as a q_table key, so it must be a tuple
         of ints, one per observation dimension.
         """
-        # EXERCISE: bin the observation.
-        #   - self._bounds holds [low, high] for the leading continuous dims,
-        #     self._bins holds the bin edges for each of them
-        #   - clip before binning so out-of-range values land in the end bins
-        #     instead of creating new ones (np.clip, np.digitize)
-        #   - the final self._n_binary_dims dims are already 0/1: use as-is
-        raise NotImplementedError("QLearningAgent.discretize -- see CHEATSHEET.md")
+        obs = np.asarray(obs, dtype=float)
+        n_cont = len(self._bounds)
+
+        indices: list[int] = []
+        # Leading continuous dims: clip into range, then bin.
+        for i in range(n_cont):
+            lo, hi = self._bounds[i]
+            value = float(np.clip(obs[i], lo, hi))
+            indices.append(int(np.digitize(value, self._bins[i])))
+        # Trailing 0/1 dims are already discrete: use as bin indices verbatim.
+        for i in range(n_cont, n_cont + self._n_binary_dims):
+            indices.append(int(round(float(obs[i]))))
+        return tuple(indices)
 
     def select_action(self, state: tuple, *, deterministic: bool = False) -> int:
         """Epsilon-greedy action for an already-discretised `state`."""
-        # EXERCISE: with probability self.epsilon return a random action out of
-        # self.n_actions (unless `deterministic`), otherwise the argmax of this
-        # state's row in self.q_table.
-        raise NotImplementedError("QLearningAgent.select_action -- see CHEATSHEET.md")
+        if not deterministic and np.random.random() < self.epsilon:
+            return int(np.random.randint(self.n_actions))
+        return int(np.argmax(self.q_table[state]))
 
     def _to_state(self, obs: np.ndarray) -> tuple:
         return self.discretize(obs)
@@ -99,13 +104,11 @@ class QLearningAgent(BaseAgent):
         done: bool,
     ) -> None:
         """Apply one temporal-difference update to Q(state, action)."""
-        # EXERCISE: the heart of Q-learning.
-        #   target = reward + gamma * max_a' Q(next_state, a')
-        #   error  = target - Q(state, action)
-        #   Q(state, action) += lr * error
-        # On a terminal state (done) there is no future reward, so the
-        # max term must be 0 rather than the table's value for next_state.
-        raise NotImplementedError("QLearningAgent._update -- see CHEATSHEET.md")
+        current = self.q_table[state][action]
+        # A terminal state has no future reward, so the bootstrap term is 0.
+        future = 0.0 if done else float(np.max(self.q_table[next_state]))
+        target = reward + self.gamma * future
+        self.q_table[state][action] = current + self.lr * (target - current)
 
     def train(self, total_episodes: int = 10_000, log_interval: int = 100) -> list[float]:
         env = envs.make(self.env_id)
